@@ -129,7 +129,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "smpsc"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "async-sink 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio 1.47.1 (registry+https://github.com/rust-lang/crates.io-index)",
