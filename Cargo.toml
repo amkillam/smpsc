@@ -11,7 +11,7 @@ keywords = ["tokio", "stream", "sink", "channel", "mpsc"]
 categories = [
   "asynchronous",
   "network-programming",
-  "communication",
+  "no-std",
   "concurrency",
   "no-std",
 ]

@@ -11,4 +11,5 @@ extern crate alloc;
 pub mod mpsc;
 pub mod oneshot;
 
+#[cfg(feature = "alloc")]
 pub use mpsc::{channel, unbounded_channel};
