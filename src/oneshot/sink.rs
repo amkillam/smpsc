@@ -74,9 +74,13 @@ impl<T> Sink<T> for Sender<T> {
     type Error = T;
 
     fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let _ = cx;
         // oneshot::Sender can accept exactly one message; we allow attempting to send
         // and let start_send error if it's already been used.
+        assert!(
+            self.0.is_some(),
+            "poll_ready called after sending a message"
+        );
+        cx.waker().wake_by_ref();
         Poll::Ready(Ok(()))
     }
 
@@ -88,13 +92,19 @@ impl<T> Sink<T> for Sender<T> {
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let _ = cx;
-        Poll::Ready(Ok(()))
+        self.poll_close(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        let _ = cx;
-        let _ = self.get_mut().0.take();
-        Poll::Ready(Ok(()))
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match self.as_mut().0.as_mut() {
+            Some(s) => match s.poll_closed(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(()) => {
+                    self.get_mut().0 = None;
+                    Poll::Ready(Ok(()))
+                }
+            },
+            None => Poll::Ready(Ok(())),
+        }
     }
 }
