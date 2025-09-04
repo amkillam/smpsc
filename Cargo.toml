@@ -40,4 +40,4 @@ tokio-stream = { version = "^0.1.17", default-features = false, features = [
   "io-util",
 ] }
 tokio = { version = "^1.15.0", default-features = false, features = ["sync"] }
-async-sink = { version = "^0.1.0", default-features = false }
+async-sink = { version = "^0.2.3", default-features = false }
