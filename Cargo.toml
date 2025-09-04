@@ -1,6 +1,6 @@
 [package]
 name = "smpsc"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2018"
 authors = ["Adam Killam <adammkillam@gmail.com>"]
 description = "Wrappers for tokio's mpsc channels which implement Stream and Sink."
@@ -30,7 +30,7 @@ tokio-stream = { version = "^0.1.17", default-features = false, features = [
   "io-util",
 ] }
 tokio = { version = "^1.15.0", default-features = false, features = ["sync"] }
-async-sink = { version = "^0.3.0", path = "../async-sink", default-features = false }
+async-sink = { version = "^0.3.1", default-features = false }
 
 [dev-dependencies]
 tokio-stream = { version = "^0.1.17", default-features = false, features = [
