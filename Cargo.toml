@@ -17,7 +17,7 @@ categories = [
 ]
 homepage = "https://github.com/amkillam/smpsc"
 documentation = "https://docs.rs/smpsc"
-rust-version = "1.45"
+rust-version = "1.40.0"
 
 [features]
 default = ["alloc"]
