@@ -13,7 +13,7 @@ use tokio_stream::Stream;
 /// A wrapper around [`tokio::sync::oneshot::Receiver`] that implements [`Stream`].
 ///
 /// [`tokio::sync::oneshot::Receiver`]: struct@tokio::sync::oneshot::Receiver
-/// [`Stream`]: trait@crate::Stream
+/// [`Stream`]: trait@tokio_stream::Stream
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Receiver<T>(pub oneshot::Receiver<T>);

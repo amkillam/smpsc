@@ -20,8 +20,9 @@ documentation = "https://docs.rs/smpsc"
 rust-version = "1.40.0"
 
 [features]
-default = ["alloc"]
+default = ["alloc", "std"]
 alloc = []
+std = ["async-sink/std"]
 time = ["tokio/time"]
 
 [dependencies]

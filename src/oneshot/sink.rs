@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 /// A thin wrapper around [`tokio::sync::oneshot::Sender`] that implements [`Sync`].
 ///
 /// [`tokio::sync::oneshot::Sender`]: struct@tokio::sync::oneshot::Sender
-/// [`Sink`]: trait@crate::Sink
+/// [`Sink`]: trait@async_sink::Sink
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Sender<T>(pub Option<oneshot::Sender<T>>);

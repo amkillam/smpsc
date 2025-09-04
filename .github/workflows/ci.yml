@@ -14,7 +14,18 @@ jobs:
       matrix:
         rust: [stable, beta]
         features:
-          ["--features=alloc", "--features=time", "--features=alloc,time", ""]
+          [
+            "--features=alloc",
+            "--features=std",
+            "--features=time",
+            "--features=alloc,std",
+            "--features=alloc,time",
+            "--features=alloc,std,time",
+            "--features=std,time",
+            "--features=std,alloc",
+            "--features=alloc,time",
+            "",
+          ]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
@@ -34,7 +45,18 @@ jobs:
       matrix:
         rust: [stable, beta]
         features:
-          ["--features=alloc", "--features=time", "--features=alloc,time", ""]
+          [
+            "--features=alloc",
+            "--features=std",
+            "--features=time",
+            "--features=alloc,std",
+            "--features=alloc,time",
+            "--features=alloc,std,time",
+            "--features=std,time",
+            "--features=std,alloc",
+            "--features=alloc,time",
+            "",
+          ]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4

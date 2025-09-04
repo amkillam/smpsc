@@ -1,6 +1,6 @@
 //! [`Sink`] implementations for [`tokio`](https://docs.rs/tokio)'s MPSC channels
 //!
-//! [`Sink`]: trait@crate::Sink
+//! [`Sink`]: trait@async_sink::Sink
 
 use alloc::boxed::Box;
 use async_sink::Sink;
@@ -20,7 +20,7 @@ pub use tokio::sync::mpsc::error::*;
 /// A thin wrapper around [`tokio::sync::mpsc::Sender`] that implements [`Sync`].
 ///
 /// [`tokio::sync::mpsc::Sender`]: struct@tokio::sync::mpsc::Sender
-/// [`Sink`]: trait@crate::Sink
+/// [`Sink`]: trait@async_sink::Sink
 pub struct Sender<T> {
     pub(crate) inner: mpsc::Sender<T>,
     // Future created by `reserve()` to register wakers for readiness.
@@ -264,7 +264,7 @@ impl<T: 'static> Sink<T> for Sender<T> {
 /// A thin wrapper around [`tokio::sync::mpsc::UnboundedSender`] that implements [`Sync`].
 ///
 /// [`tokio::sync::mpsc::UnboundedSender`]: struct@tokio::sync::mpsc::UnboundedSender
-/// [`Sink`]: trait@crate::Sink
+/// [`Sink`]: trait@async_sink::Sink
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct UnboundedSender<T>(pub mpsc::UnboundedSender<T>);
