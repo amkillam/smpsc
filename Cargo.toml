@@ -1,6 +1,6 @@
 [package]
 name = "smpsc"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
 authors = ["Adam Killam <adammkillam@gmail.com>"]
 description = "Wrappers for tokio's mpsc channels which implement Stream and Sink."
