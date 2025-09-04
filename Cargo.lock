@@ -232,7 +232,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "smpsc"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-sink 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-test 0.3.31 (registry+https://github.com/rust-lang/crates.io-index)",
