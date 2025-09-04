@@ -21,31 +21,30 @@ pub use tokio::sync::mpsc::error::*;
 ///
 /// [`tokio::sync::mpsc::Sender`]: struct@tokio::sync::mpsc::Sender
 /// [`Sink`]: trait@async_sink::Sink
-pub struct Sender<T> {
+pub struct Sender<'a, T: 'a> {
     pub(crate) inner: mpsc::Sender<T>,
     // Future created by `reserve()` to register wakers for readiness.
     // Stored across polls to maintain proper waker registration.
     #[allow(clippy::type_complexity)]
     reserve_fut: Option<
-        Pin<
-            Box<
-                dyn core::future::Future<Output = Result<(), mpsc::error::TrySendError<()>>>
-                    + 'static,
-            >,
-        >,
+        Pin<Box<dyn core::future::Future<Output = Result<(), mpsc::error::TrySendError<()>>> + 'a>>,
     >,
+    _lifetime: core::marker::PhantomData<&'a ()>,
 }
 
 // SAFETY: reserve_fut is the only non-Send field, and it is pinned and owned by the struct.
-unsafe impl<T> Send for Sender<T> where mpsc::Sender<T>: Send {}
+unsafe impl<'a, T> Send for Sender<'a, T> where mpsc::Sender<T>: Send {}
+// SAFETY: reserve_fut is the only non-Sync field, and it is pinned and owned by the struct.
+unsafe impl<'a, T> Sync for Sender<'a, T> where mpsc::Sender<T>: Sync {}
 
-impl<T> Sender<T> {
+impl<'a, T> Sender<'a, T> {
     /// Create a new `Sender` wrapping the provided `Sender`.
     #[inline(always)]
     pub fn new(sender: mpsc::Sender<T>) -> Self {
         Self {
             inner: sender,
             reserve_fut: None,
+            _lifetime: core::marker::PhantomData,
         }
     }
 
@@ -136,10 +135,12 @@ impl<T> Sender<T> {
             mpsc::error::TrySendError::Closed(e) => mpsc::error::TrySendError::Closed(Self {
                 inner: e,
                 reserve_fut: None,
+                _lifetime: core::marker::PhantomData,
             }),
             mpsc::error::TrySendError::Full(e) => mpsc::error::TrySendError::Full(Self {
                 inner: e,
                 reserve_fut: None,
+                _lifetime: core::marker::PhantomData,
             }),
         })
     }
@@ -160,30 +161,31 @@ impl<T> Sender<T> {
     }
 }
 
-impl<T> AsRef<mpsc::Sender<T>> for Sender<T> {
+impl<'a, T> AsRef<mpsc::Sender<T>> for Sender<'a, T> {
     #[inline(always)]
     fn as_ref(&self) -> &mpsc::Sender<T> {
         &self.inner
     }
 }
 
-impl<T> AsMut<mpsc::Sender<T>> for Sender<T> {
+impl<'a, T> AsMut<mpsc::Sender<T>> for Sender<'a, T> {
     #[inline(always)]
     fn as_mut(&mut self) -> &mut mpsc::Sender<T> {
         &mut self.inner
     }
 }
 
-impl<T> Clone for Sender<T> {
+impl<'a, T> Clone for Sender<'a, T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
             reserve_fut: None,
+            _lifetime: core::marker::PhantomData,
         }
     }
 }
 
-impl<T> fmt::Debug for Sender<T> {
+impl<'a, T> fmt::Debug for Sender<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sender")
             .field("inner", &self.inner)
@@ -191,14 +193,14 @@ impl<T> fmt::Debug for Sender<T> {
     }
 }
 
-impl<T> From<mpsc::Sender<T>> for Sender<T> {
+impl<'a, T> From<mpsc::Sender<T>> for Sender<'a, T> {
     #[inline(always)]
     fn from(sender: mpsc::Sender<T>) -> Self {
         Self::new(sender)
     }
 }
 
-impl<T: 'static> Sink<T> for Sender<T> {
+impl<'a, T: 'a> Sink<T> for Sender<'a, T> {
     type Error = mpsc::error::TrySendError<()>;
 
     fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -365,7 +367,7 @@ impl<T> Sink<T> for UnboundedSender<T> {
 /// [`Sender`]: struct@Sender
 /// [`ReceiverStream`]: struct@tokio_stream::wrappers::ReceiverStream
 #[inline(always)]
-pub fn channel<T>(buffer: usize) -> (Sender<T>, ReceiverStream<T>) {
+pub fn channel<'a, T>(buffer: usize) -> (Sender<'a, T>, ReceiverStream<T>) {
     let (tx, rx) = mpsc::channel(buffer);
     (Sender::new(tx), ReceiverStream::new(rx))
 }
