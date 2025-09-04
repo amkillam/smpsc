@@ -1,0 +1,43 @@
+[package]
+name = "smpsc"
+version = "0.1.0"
+edition = "2018"
+authors = ["Adam Killam <adammkillam@gmail.com>"]
+description = "Wrappers for tokio's mpsc channels which implement Stream and Sink."
+license = "MIT"
+repository = "https://github.com/amkillam/smpsc"
+readme = "README.md"
+keywords = [
+  "tokio",
+  "stream",
+  "asynchronous",
+  "async",
+  "channel",
+  "mpsc",
+  "sink",
+]
+categories = [
+  "asynchronous",
+  "network-programming",
+  "data-structures",
+  "communication",
+  "concurrency",
+  "collections",
+  "zero-cost-abstractions",
+  "no-std",
+]
+homepage = "https://github.com/amkillam/smpsc"
+documentation = "https://docs.rs/smpsc"
+rust-version = "1.45"
+
+[features]
+default = ["alloc"]
+alloc = []
+time = ["tokio/time"]
+
+[dependencies]
+tokio-stream = { version = "^0.1.17", default-features = false, features = [
+  "io-util",
+] }
+tokio = { version = "^1.15.0", default-features = false, features = ["sync"] }
+async-sink = { version = "^0.1.0", default-features = false }

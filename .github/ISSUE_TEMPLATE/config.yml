@@ -1,0 +1,4 @@
+contact_links:
+  - name: Question
+    url: https://github.com/amkillam/smpsc/discussions
+    about: Questions about smpsc should be posted as a GitHub discussion.
