@@ -22,7 +22,7 @@ rust-version = "1.40.0"
 [features]
 default = ["alloc", "std"]
 alloc = ["async-sink/alloc"]
-std = ["async-sink/std"]
+std = ["async-sink/std", "alloc"]
 time = ["tokio/time"]
 
 [dependencies]
@@ -30,7 +30,7 @@ tokio-stream = { version = "^0.1.17", default-features = false, features = [
   "io-util",
 ] }
 tokio = { version = "^1.15.0", default-features = false, features = ["sync"] }
-async-sink = { version = "^0.3.0", default-features = false }
+async-sink = { version = "^0.3.0", path = "../async-sink", default-features = false }
 
 [dev-dependencies]
 tokio-stream = { version = "^0.1.17", default-features = false, features = [

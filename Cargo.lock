@@ -23,6 +23,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-sink"
+version = "0.3.1"
+dependencies = [
+ "either 1.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tokio-stream 0.1.17 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.75"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -234,7 +242,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "smpsc"
 version = "0.2.1"
 dependencies = [
- "async-sink 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "async-sink 0.3.1",
  "futures-test 0.3.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures-util 0.3.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio 1.47.1 (registry+https://github.com/rust-lang/crates.io-index)",

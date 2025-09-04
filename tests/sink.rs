@@ -1,226 +1,261 @@
-use core::{
-    cell::{Cell, RefCell},
-    convert::Infallible,
-    fmt,
-    future::Future,
-    mem,
-    pin::Pin,
-    sync::atomic::{AtomicBool, Ordering},
-    task::{Context, Poll, Waker},
-};
-use futures_util::{future, FutureExt, TryFutureExt};
-use std::{collections::VecDeque, rc::Rc, sync::Arc};
-use tokio_stream::StreamExt;
+#[cfg(feature = "alloc")]
+mod if_async {
+    pub use smpsc::oneshot;
+    pub extern crate alloc;
+    pub use alloc::{collections::vec_deque::VecDeque, rc::Rc, sync::Arc, vec::Vec};
+    pub use core::{
+        cell::{Cell, RefCell},
+        convert::Infallible,
+        future::Future,
+        mem,
+        pin::Pin,
+        sync::atomic::{AtomicBool, Ordering},
+        task::{Context, Poll, Waker},
+    };
+    pub use futures_util::{FutureExt, TryFutureExt};
+    pub use tokio_stream::StreamExt;
 
-use async_sink::{Sink, SinkExt};
+    pub use async_sink::{Sink, SinkExt};
 
-use smpsc::oneshot;
+    // Sends a value on an i32 channel sink
+    pub struct StartSendFut<S: async_sink::Sink<Item> + Unpin, Item: Unpin>(
+        Option<S>,
+        Option<Item>,
+    );
+
+    impl<S: async_sink::Sink<Item> + Unpin, Item: Unpin> StartSendFut<S, Item> {
+        pub fn new(sink: S, item: Item) -> Self {
+            Self(Some(sink), Some(item))
+        }
+    }
+    impl<S: async_sink::Sink<Item> + Unpin, Item: Unpin> Future for StartSendFut<S, Item> {
+        type Output = Result<S, S::Error>;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            let Self(inner, item) = self.get_mut();
+            {
+                let mut inner = inner.as_mut().unwrap();
+                futures_util::ready!(Pin::new(&mut inner).poll_ready(cx))?;
+                Pin::new(&mut inner).start_send(item.take().unwrap())?;
+            }
+            Poll::Ready(Ok(inner.take().unwrap()))
+        }
+    }
+
+    // Immediately accepts all requests to start pushing, but completion is managed
+    // by manually flushing
+    pub struct ManualFlush<T: Unpin> {
+        data: Vec<T>,
+        waiting_tasks: Vec<Waker>,
+    }
+
+    impl<T: Unpin> async_sink::Sink<Option<T>> for ManualFlush<T> {
+        type Error = ();
+
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(mut self: Pin<&mut Self>, item: Option<T>) -> Result<(), Self::Error> {
+            if let Some(item) = item {
+                self.data.push(item);
+            } else {
+                self.force_flush();
+            }
+            Ok(())
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            if self.data.is_empty() {
+                Poll::Ready(Ok(()))
+            } else {
+                self.waiting_tasks.push(cx.waker().clone());
+                Poll::Pending
+            }
+        }
+
+        fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.poll_flush(cx)
+        }
+    }
+
+    impl<T: Unpin> ManualFlush<T> {
+        pub fn new() -> Self {
+            Self {
+                data: Vec::new(),
+                waiting_tasks: Vec::new(),
+            }
+        }
+
+        pub fn force_flush(&mut self) -> Vec<T> {
+            for task in self.waiting_tasks.drain(..) {
+                task.wake()
+            }
+            mem::take(&mut self.data)
+        }
+    }
+
+    pub struct ManualAllow<T: Unpin> {
+        pub data: Vec<T>,
+        pub allow: Rc<Allow>,
+    }
+
+    pub struct Allow {
+        pub flag: core::cell::Cell<bool>,
+        pub tasks: core::cell::RefCell<Vec<Waker>>,
+    }
+
+    impl Allow {
+        pub fn new() -> Self {
+            Self {
+                flag: Cell::new(false),
+                tasks: RefCell::new(Vec::new()),
+            }
+        }
+
+        pub fn check(&self, cx: &mut Context<'_>) -> bool {
+            if self.flag.get() {
+                true
+            } else {
+                self.tasks.borrow_mut().push(cx.waker().clone());
+                false
+            }
+        }
+
+        pub fn start(&self) {
+            self.flag.set(true);
+            let mut tasks = self.tasks.borrow_mut();
+            for task in tasks.drain(..) {
+                task.wake();
+            }
+        }
+    }
+
+    impl<T: Unpin> Sink<T> for ManualAllow<T> {
+        type Error = ();
+
+        fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            if self.allow.check(cx) {
+                Poll::Ready(Ok(()))
+            } else {
+                Poll::Pending
+            }
+        }
+
+        fn start_send(mut self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+            self.data.push(item);
+            Ok(())
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    pub fn manual_allow<T: Unpin>() -> (ManualAllow<T>, Rc<Allow>) {
+        let allow = Rc::new(Allow::new());
+        let manual_allow = ManualAllow {
+            data: Vec::new(),
+            allow: allow.clone(),
+        };
+        (manual_allow, allow)
+    }
+
+    // An Unpark struct that records unpark events for inspection
+    pub struct Flag(AtomicBool);
+
+    impl Flag {
+        pub fn new() -> Arc<Self> {
+            Arc::new(Self(AtomicBool::new(false)))
+        }
+
+        pub fn take(&self) -> bool {
+            self.0.swap(false, Ordering::SeqCst)
+        }
+
+        pub fn set(&self, v: bool) {
+            self.0.store(v, Ordering::SeqCst)
+        }
+    }
+
+    impl futures_util::task::ArcWake for Flag {
+        fn wake_by_ref(arc_self: &Arc<Self>) {
+            arc_self.set(true)
+        }
+    }
+
+    #[inline(always)]
+    pub fn flag_cx<'a: 'b + 'c + 'd, 'b: 'c + 'd, 'c: 'd, 'd, F, R>(f: F) -> R
+    where
+        R: 'a,
+        F: FnOnce(Arc<Flag>, &'c mut Context<'b>) -> R,
+        F: 'd,
+    {
+        let flag = Flag::new();
+        let waker = futures_util::task::waker(flag.clone());
+        let mut cx =
+            Context::from_waker(unsafe { core::mem::transmute::<&Waker, &'b Waker>(&waker) });
+        f(flag.clone(), unsafe {
+            core::mem::transmute::<&mut Context<'b>, &'c mut Context<'b>>(&mut cx)
+        })
+    }
+
+    #[inline(always)]
+    pub async fn async_flag_cx<'a: 'b + 'c + 'd, 'b: 'c + 'd, 'c: 'd, 'd, F, R, Fut>(f: F) -> R
+    where
+        R: 'd,
+        Fut: Future<Output = R> + 'd,
+        F: FnOnce(Arc<Flag>, &'c mut Context<'b>) -> Fut,
+        F: 'd,
+    {
+        let flag = Flag::new();
+        let waker = futures_util::task::waker(flag.clone());
+        let cx = Context::from_waker(unsafe { core::mem::transmute::<&Waker, &'b Waker>(&waker) });
+        let leaked_context = Box::leak(Box::new(cx));
+        let ret = f(flag.clone(), unsafe {
+            core::mem::transmute::<&mut Context<'b>, &'c mut Context<'b>>(leaked_context)
+        })
+        .await;
+        //Unleak
+        unsafe {
+            let alloc = Box::from_raw(leaked_context as *mut Context<'b>);
+            drop(alloc);
+        }
+        ret
+    }
+
+    pub fn sassert_next<S>(s: &mut S, item: S::Item)
+    where
+        S: tokio_stream::Stream + Unpin,
+        S::Item: Eq + core::fmt::Debug,
+    {
+        match Pin::new(s).poll_next(&mut futures_test::task::panic_context()) {
+            Poll::Ready(None) => panic!("stream is at its end"),
+            Poll::Ready(Some(e)) => assert_eq!(e, item),
+            Poll::Pending => panic!("stream wasn't ready"),
+        }
+    }
+
+    pub fn unwrap<T, E: core::fmt::Debug>(x: Poll<Result<T, E>>) -> T {
+        match x {
+            Poll::Ready(Ok(x)) => x,
+            Poll::Ready(Err(_)) => panic!("Poll::Ready(Err(_))"),
+            Poll::Pending => panic!("Poll::Pending"),
+        }
+    }
+}
 
 #[cfg(feature = "alloc")]
-fn sassert_next<S>(s: &mut S, item: S::Item)
-where
-    S: tokio_stream::Stream + Unpin,
-    S::Item: Eq + fmt::Debug,
-{
-    match Pin::new(s).poll_next(&mut futures_test::task::panic_context()) {
-        Poll::Ready(None) => panic!("stream is at its end"),
-        Poll::Ready(Some(e)) => assert_eq!(e, item),
-        Poll::Pending => panic!("stream wasn't ready"),
-    }
-}
+use if_async::*;
 
-fn unwrap<T, E: fmt::Debug>(x: Poll<Result<T, E>>) -> T {
-    match x {
-        Poll::Ready(Ok(x)) => x,
-        Poll::Ready(Err(_)) => panic!("Poll::Ready(Err(_))"),
-        Poll::Pending => panic!("Poll::Pending"),
-    }
-}
-
-// An Unpark struct that records unpark events for inspection
-struct Flag(AtomicBool);
-
-impl Flag {
-    fn new() -> Arc<Self> {
-        Arc::new(Self(AtomicBool::new(false)))
-    }
-
-    fn take(&self) -> bool {
-        self.0.swap(false, Ordering::SeqCst)
-    }
-
-    fn set(&self, v: bool) {
-        self.0.store(v, Ordering::SeqCst)
-    }
-}
-
-impl futures_util::task::ArcWake for Flag {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        arc_self.set(true)
-    }
-}
-
-#[inline(always)]
-fn flag_cx<'a: 'b + 'c + 'd, 'b: 'c + 'd, 'c: 'd, 'd, F, R>(f: F) -> R
-where
-    R: 'a,
-    F: FnOnce(Arc<Flag>, &'c mut Context<'b>) -> R,
-    F: 'd,
-{
-    let flag = Flag::new();
-    let waker = futures_util::task::waker(flag.clone());
-    let mut cx = Context::from_waker(unsafe { core::mem::transmute::<&Waker, &'b Waker>(&waker) });
-    f(flag.clone(), unsafe {
-        core::mem::transmute::<&mut Context<'b>, &'c mut Context<'b>>(&mut cx)
-    })
-}
-
-// Sends a value on an i32 channel sink
-struct StartSendFut<S: Sink<Item> + Unpin, Item: Unpin>(Option<S>, Option<Item>);
-
-impl<S: Sink<Item> + Unpin, Item: Unpin> StartSendFut<S, Item> {
-    fn new(sink: S, item: Item) -> Self {
-        Self(Some(sink), Some(item))
-    }
-}
-
-impl<S: Sink<Item> + Unpin, Item: Unpin> Future for StartSendFut<S, Item> {
-    type Output = Result<S, S::Error>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let Self(inner, item) = self.get_mut();
-        {
-            let mut inner = inner.as_mut().unwrap();
-            futures_util::ready!(Pin::new(&mut inner).poll_ready(cx))?;
-            Pin::new(&mut inner).start_send(item.take().unwrap())?;
-        }
-        Poll::Ready(Ok(inner.take().unwrap()))
-    }
-}
-
-// Immediately accepts all requests to start pushing, but completion is managed
-// by manually flushing
-struct ManualFlush<T: Unpin> {
-    data: Vec<T>,
-    waiting_tasks: Vec<Waker>,
-}
-
-impl<T: Unpin> Sink<Option<T>> for ManualFlush<T> {
-    type Error = ();
-
-    fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: Option<T>) -> Result<(), Self::Error> {
-        if let Some(item) = item {
-            self.data.push(item);
-        } else {
-            self.force_flush();
-        }
-        Ok(())
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.data.is_empty() {
-            Poll::Ready(Ok(()))
-        } else {
-            self.waiting_tasks.push(cx.waker().clone());
-            Poll::Pending
-        }
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.poll_flush(cx)
-    }
-}
-
-impl<T: Unpin> ManualFlush<T> {
-    fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            waiting_tasks: Vec::new(),
-        }
-    }
-
-    fn force_flush(&mut self) -> Vec<T> {
-        for task in self.waiting_tasks.drain(..) {
-            task.wake()
-        }
-        mem::take(&mut self.data)
-    }
-}
-
-struct ManualAllow<T: Unpin> {
-    data: Vec<T>,
-    allow: Rc<Allow>,
-}
-
-struct Allow {
-    flag: Cell<bool>,
-    tasks: RefCell<Vec<Waker>>,
-}
-
-impl Allow {
-    fn new() -> Self {
-        Self {
-            flag: Cell::new(false),
-            tasks: RefCell::new(Vec::new()),
-        }
-    }
-
-    fn check(&self, cx: &mut Context<'_>) -> bool {
-        if self.flag.get() {
-            true
-        } else {
-            self.tasks.borrow_mut().push(cx.waker().clone());
-            false
-        }
-    }
-
-    fn start(&self) {
-        self.flag.set(true);
-        let mut tasks = self.tasks.borrow_mut();
-        for task in tasks.drain(..) {
-            task.wake();
-        }
-    }
-}
-
-impl<T: Unpin> Sink<T> for ManualAllow<T> {
-    type Error = ();
-
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        if self.allow.check(cx) {
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        }
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
-        self.data.push(item);
-        Ok(())
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-}
-
-fn manual_allow<T: Unpin>() -> (ManualAllow<T>, Rc<Allow>) {
-    let allow = Rc::new(Allow::new());
-    let manual_allow = ManualAllow {
-        data: Vec::new(),
-        allow: allow.clone(),
-    };
-    (manual_allow, allow)
-}
-
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn either_sink() {
     let mut s = if true {
@@ -232,6 +267,7 @@ async fn either_sink() {
     Pin::new(&mut s).start_send(0).unwrap();
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn vec_sink() {
     let mut v = Vec::new();
@@ -242,6 +278,7 @@ async fn vec_sink() {
     assert_eq!(v, vec![0, 1]);
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn vecdeque_sink() {
     let mut deque = VecDeque::new();
@@ -253,6 +290,7 @@ async fn vecdeque_sink() {
     assert_eq!(deque.pop_front(), None);
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn send() {
     let mut v = Vec::new();
@@ -267,6 +305,7 @@ async fn send() {
     assert_eq!(v, vec![0, 1, 2]);
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn send_all() {
     let mut v = Vec::new();
@@ -294,7 +333,7 @@ async fn send_all() {
 async fn mpsc_blocking_start_send() {
     let (mut tx, mut rx) = smpsc::mpsc::channel::<usize>(1);
 
-    future::lazy(|_| {
+    futures_util::future::lazy(|_| {
         flag_cx(|flag, cx| {
             assert_eq!(Pin::new(&mut tx).poll_ready(cx), Poll::Ready(Ok(())));
             assert!(flag.take());
@@ -315,20 +354,20 @@ async fn mpsc_blocking_start_send() {
 
 // test `flush` by using `with` to make the first insertion into a sink block
 // until a oneshot is completed
-
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn with_flush() {
     let (tx, rx) = oneshot::channel();
     let mut block = rx.boxed();
     let mut sink = Vec::new().with(|elem| {
-        mem::replace(&mut block, future::ok(()).boxed())
+        mem::replace(&mut block, futures_util::future::ok(()).boxed())
             .map_ok(move |()| elem + 1)
             .map_err(|_| -> Infallible { panic!() })
     });
 
     assert_eq!(Pin::new(&mut sink).start_send(0).ok(), Some(()));
 
-    flag_cx(|flag, cx| async move {
+    async_flag_cx(|flag, cx| async move {
         let mut task = sink.flush();
         assert!(task.poll_unpin(cx).is_pending());
         tx.send(()).unwrap();
@@ -339,13 +378,14 @@ async fn with_flush() {
         sink.send(1).await.unwrap();
         assert_eq!(sink.get_ref(), &[1, 2]);
     })
-    .await
+    .await;
 }
 
 // test simple use of with to change data
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn with_as_map() {
-    let mut sink = Vec::new().with(|item| future::ok::<i32, Infallible>(item * 2));
+    let mut sink = Vec::new().with(|item| futures_util::future::ok::<i32, Infallible>(item * 2));
     sink.send(0).await.unwrap();
     sink.send(1).await.unwrap();
     sink.send(2).await.unwrap();
@@ -353,6 +393,7 @@ async fn with_as_map() {
 }
 
 // test simple use of with_flat_map
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn with_flat_map() {
     let mut sink = Vec::new().with_flat_map(|item| tokio_stream::iter(vec![item; item]).map(Ok));
@@ -368,9 +409,10 @@ async fn with_flat_map() {
 #[tokio::test]
 async fn with_propagates_poll_ready() {
     let (tx, mut rx) = smpsc::mpsc::channel::<i32>(1);
-    let mut tx = tx.with(|item: i32| future::ok::<i32, smpsc::mpsc::SendError<()>>(item + 10));
+    let mut tx =
+        tx.with(|item: i32| futures_util::future::ok::<i32, smpsc::mpsc::SendError<()>>(item + 10));
 
-    future::lazy(|_| {
+    futures_util::future::lazy(|_| {
         flag_cx(|flag, cx| {
             let mut tx = Pin::new(&mut tx);
 
@@ -392,9 +434,10 @@ async fn with_propagates_poll_ready() {
 
 // test that the `with` sink doesn't require the underlying sink to flush,
 // but doesn't claim to be flushed until the underlying sink is
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn with_flush_propagate() {
-    let mut sink = ManualFlush::new().with(future::ok::<Option<i32>, ()>);
+    let mut sink = ManualFlush::new().with(futures_util::future::ok::<Option<i32>, ()>);
     flag_cx(|flag, cx| {
         unwrap(Pin::new(&mut sink).poll_ready(cx));
         Pin::new(&mut sink).start_send(Some(0)).unwrap();
@@ -420,13 +463,13 @@ async fn with_implements_clone() {
     let rx = {
         let (tx, rx) = smpsc::mpsc::channel(5);
         {
-            let mut is_positive = tx
-                .clone()
-                .with(|item| future::ok::<bool, smpsc::mpsc::SendError<()>>(item > 0));
+            let mut is_positive = tx.clone().with(|item| {
+                futures_util::future::ok::<bool, smpsc::mpsc::SendError<()>>(item > 0)
+            });
 
-            let mut is_long = tx
-                .clone()
-                .with(|item: &str| future::ok::<bool, smpsc::mpsc::SendError<()>>(item.len() > 5));
+            let mut is_long = tx.clone().with(|item: &str| {
+                futures_util::future::ok::<bool, smpsc::mpsc::SendError<()>>(item.len() > 5)
+            });
 
             is_positive.clone().send(-1).await.unwrap();
             is_long.clone().send("123456").await.unwrap();
@@ -446,6 +489,7 @@ async fn with_implements_clone() {
 }
 
 // test that a buffer is a no-nop around a sink that always accepts sends
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn buffer_noop() {
     let mut sink = Vec::new().buffer(0);
@@ -461,6 +505,7 @@ async fn buffer_noop() {
 
 // test basic buffer functionality, including both filling up to capacity,
 // and writing out when the underlying sink is ready
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn buffer() {
     let (sink, allow) = manual_allow::<i32>();
@@ -480,6 +525,7 @@ async fn buffer() {
     })
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn fanout_smoke() {
     let sink1 = Vec::new();
@@ -502,7 +548,7 @@ async fn fanout_backpressure() {
 
     let mut sink = StartSendFut::new(sink, 0).await.unwrap();
 
-    flag_cx(|flag, cx| {
+    async_flag_cx(|flag, cx| {
         async move {
             let mut task = sink.send(2);
             assert!(!flag.take());
