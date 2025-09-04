@@ -7,15 +7,7 @@ description = "Wrappers for tokio's mpsc channels which implement Stream and Sin
 license = "MIT"
 repository = "https://github.com/amkillam/smpsc"
 readme = "README.md"
-keywords = [
-  "tokio",
-  "stream",
-  "asynchronous",
-  "async",
-  "channel",
-  "mpsc",
-  "sink",
-]
+keywords = ["tokio", "stream", "sink", "channel", "mpsc"]
 categories = [
   "asynchronous",
   "network-programming",
