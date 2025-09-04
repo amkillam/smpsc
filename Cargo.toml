@@ -21,7 +21,7 @@ rust-version = "1.40.0"
 
 [features]
 default = ["alloc", "std"]
-alloc = []
+alloc = ["async-sink/alloc"]
 std = ["async-sink/std"]
 time = ["tokio/time"]
 
