@@ -1,3 +1,4 @@
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn it_works() {
     use async_sink::SinkExt;

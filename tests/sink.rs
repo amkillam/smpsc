@@ -12,17 +12,17 @@ use futures_util::{future, FutureExt, TryFutureExt};
 use std::{collections::VecDeque, rc::Rc, sync::Arc};
 use tokio_stream::StreamExt;
 
-use async_sink::{Sink, SinkErrInto, SinkExt};
-use core::future::poll_fn;
-use futures_test::task::panic_context;
-use smpsc::{mpsc, oneshot};
+use async_sink::{Sink, SinkExt};
 
+use smpsc::oneshot;
+
+#[cfg(feature = "alloc")]
 fn sassert_next<S>(s: &mut S, item: S::Item)
 where
     S: tokio_stream::Stream + Unpin,
     S::Item: Eq + fmt::Debug,
 {
-    match Pin::new(s).poll_next(&mut panic_context()) {
+    match Pin::new(s).poll_next(&mut futures_test::task::panic_context()) {
         Poll::Ready(None) => panic!("stream is at its end"),
         Poll::Ready(Some(e)) => assert_eq!(e, item),
         Poll::Pending => panic!("stream wasn't ready"),
@@ -289,10 +289,10 @@ async fn send_all() {
 
 // Test that `start_send` on an `mpsc` channel does indeed block when the
 // channel is full
-
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn mpsc_blocking_start_send() {
-    let (mut tx, mut rx) = mpsc::channel::<usize>(1);
+    let (mut tx, mut rx) = smpsc::mpsc::channel::<usize>(1);
 
     future::lazy(|_| {
         flag_cx(|flag, cx| {
@@ -364,11 +364,11 @@ async fn with_flat_map() {
 }
 
 // Check that `with` propagates `poll_ready` to the inner sink.
-
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn with_propagates_poll_ready() {
-    let (tx, mut rx) = mpsc::channel::<i32>(1);
-    let mut tx = tx.with(|item: i32| future::ok::<i32, mpsc::SendError<()>>(item + 10));
+    let (tx, mut rx) = smpsc::mpsc::channel::<i32>(1);
+    let mut tx = tx.with(|item: i32| future::ok::<i32, smpsc::mpsc::SendError<()>>(item + 10));
 
     future::lazy(|_| {
         flag_cx(|flag, cx| {
@@ -414,18 +414,19 @@ async fn with_flush_propagate() {
 }
 
 // test that `Clone` is implemented on `with` sinks
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn with_implements_clone() {
     let rx = {
-        let (tx, rx) = mpsc::channel(5);
+        let (tx, rx) = smpsc::mpsc::channel(5);
         {
             let mut is_positive = tx
                 .clone()
-                .with(|item| future::ok::<bool, mpsc::SendError<()>>(item > 0));
+                .with(|item| future::ok::<bool, smpsc::mpsc::SendError<()>>(item > 0));
 
             let mut is_long = tx
                 .clone()
-                .with(|item: &str| future::ok::<bool, mpsc::SendError<()>>(item.len() > 5));
+                .with(|item: &str| future::ok::<bool, smpsc::mpsc::SendError<()>>(item.len() > 5));
 
             is_positive.clone().send(-1).await.unwrap();
             is_long.clone().send("123456").await.unwrap();
@@ -492,10 +493,11 @@ async fn fanout_smoke() {
     assert_eq!(sink2, vec![1, 2, 3]);
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn fanout_backpressure() {
-    let (left_send, mut left_recv) = mpsc::channel(1);
-    let (right_send, mut right_recv) = mpsc::channel(1);
+    let (left_send, mut left_recv) = smpsc::mpsc::channel(1);
+    let (right_send, mut right_recv) = smpsc::mpsc::channel(1);
     let sink = left_send.fanout(right_send);
 
     let mut sink = StartSendFut::new(sink, 0).await.unwrap();
@@ -527,28 +529,30 @@ async fn fanout_backpressure() {
     .await;
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn sink_map_err() {
     {
-        let cx = &mut panic_context();
-        let (tx, rx) = mpsc::channel(1);
+        let cx = &mut futures_test::task::panic_context();
+        let (tx, rx) = smpsc::mpsc::channel(1);
         let mut tx = tx.sink_map_err(|_| ());
         assert_eq!(Pin::new(&mut tx).start_send(()), Ok(()));
         drop(rx);
         assert_eq!(Pin::new(&mut tx).poll_flush(cx), Poll::Ready(Ok(())));
     }
 
-    let tx = mpsc::channel(1).0;
+    let tx = smpsc::mpsc::channel(1).0;
     assert_eq!(
         Pin::new(&mut tx.sink_map_err(|_| ())).start_send(()),
         Err(())
     );
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn sink_unfold() {
-    poll_fn(|cx| {
-        let (tx, mut rx) = mpsc::channel(1);
+    core::future::poll_fn(|cx| {
+        let (tx, mut rx) = smpsc::mpsc::channel(1);
         let unfold = async_sink::unfold((), |(), i: i32| {
             let tx = tx.clone();
             async move {
@@ -594,6 +598,7 @@ async fn sink_unfold() {
     .await
 }
 
+#[cfg(feature = "alloc")]
 #[tokio::test]
 async fn err_into() {
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -606,22 +611,23 @@ async fn err_into() {
     }
     impl core::error::Error for ErrIntoTest {}
 
-    impl From<mpsc::SendError<()>> for ErrIntoTest {
-        fn from(_e: mpsc::SendError<()>) -> Self {
+    impl From<smpsc::mpsc::SendError<()>> for ErrIntoTest {
+        fn from(_e: smpsc::mpsc::SendError<()>) -> Self {
             ErrIntoTest
         }
     }
 
     {
-        let cx = &mut panic_context();
-        let (tx, rx) = mpsc::channel(1);
-        let mut tx: SinkErrInto<mpsc::Sender<()>, _, ErrIntoTest> = tx.sink_err_into();
+        let cx = &mut futures_test::task::panic_context();
+        let (tx, rx) = smpsc::mpsc::channel(1);
+        let mut tx: async_sink::SinkErrInto<smpsc::mpsc::Sender<()>, _, ErrIntoTest> =
+            tx.sink_err_into();
         assert_eq!(Pin::new(&mut tx).start_send(()), Ok(()));
         drop(rx);
         assert_eq!(Pin::new(&mut tx).poll_flush(cx), Poll::Ready(Ok(())));
     }
 
-    let tx = mpsc::channel(1).0;
+    let tx = smpsc::mpsc::channel(1).0;
     assert_eq!(
         Pin::new(&mut tx.sink_err_into()).start_send(()),
         Err(ErrIntoTest)
